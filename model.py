@@ -35,9 +35,10 @@ def activate_drop(m):
 # Defines the new fc layer and classification layer
 # |--Linear--|--bn--|--relu--|--Linear--|
 class ClassBlock(nn.Module):
-    def __init__(self, input_dim, class_num, droprate, relu=False, bnorm=True, linear=512, return_f = False):
+    def __init__(self, input_dim, class_num, droprate, relu=False, bnorm=True, linear=512, return_f = False, return_c=True):
         super(ClassBlock, self).__init__()
         self.return_f = return_f
+        self.return_c = return_c
         add_block = []
         if linear>0:
             add_block += [nn.Linear(input_dim, linear)]
@@ -62,6 +63,8 @@ class ClassBlock(nn.Module):
     def forward(self, x):
         x = self.add_block(x)
         if self.return_f:
+            if not self.return_c:
+                return x
             f = x
             x = self.classifier(x)
             return [x,f]
@@ -72,7 +75,7 @@ class ClassBlock(nn.Module):
 # Define the ResNet50-based Model
 class ft_net(nn.Module):
 
-    def __init__(self, class_num=751, droprate=0.5, stride=2, circle=False, ibn=False, linear_num=512):
+    def __init__(self, class_num=751, droprate=0.5, stride=2, circle=False, ibn=False, linear_num=512, return_c=True):
         super(ft_net, self).__init__()
         model_ft = models.resnet50(pretrained=True)
         if ibn==True:
@@ -84,7 +87,7 @@ class ft_net(nn.Module):
         model_ft.avgpool = nn.AdaptiveAvgPool2d((1,1))
         self.model = model_ft
         self.circle = circle
-        self.classifier = ClassBlock(2048, class_num, droprate, linear=linear_num, return_f = circle)
+        self.classifier = ClassBlock(2048, class_num, droprate, linear=linear_num, return_f = circle, return_c=return_c)
 
     def forward(self, x):
         x = self.model.conv1(x)

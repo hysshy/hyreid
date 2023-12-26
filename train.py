@@ -33,7 +33,10 @@ except ImportError: # will be 3.x series
     print('This is not an error. If you want to use low precision, i.e., fp16, please install the apex with cuda support (https://github.com/NVIDIA/apex) and update pytorch to 1.0')
 
 from pytorch_metric_learning import losses, miners #pip install pytorch-metric-learning
-
+import numpy as np
+from triplet_sampler import RandomIdentitySampler
+from ranking_loss import RankLoss, CrossEntropyLabelSmooth
+from center_loss import CenterLoss
 ######################################################################
 # Options
 # --------
@@ -78,6 +81,9 @@ parser.add_argument('--ins_gamma', default=32, type=int, help='gamma for instanc
 parser.add_argument('--triplet', action='store_true', help='use triplet loss' )
 parser.add_argument('--lifted', action='store_true', help='use lifted loss' )
 parser.add_argument('--sphere', action='store_true', help='use sphere loss' )
+parser.add_argument('--rank', action='store_true', help='use rank loss' )
+parser.add_argument('--center', action='store_true', help='use center loss' )
+parser.add_argument('--label_smooth', action='store_true', help='use label_smooth loss' )
 parser.add_argument('--adv', default=0.0, type=float, help='use adv loss as 1.0' )
 parser.add_argument('--aiter', default=10, type=float, help='use adv loss with iter' )
 
@@ -117,6 +123,13 @@ transform_train_list = [
         transforms.ToTensor(),
         transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225])
         ]
+
+# transforms_crop = transforms.Compose(
+#     transforms.RandomCrop((h, w))
+# )
+transforms_crop = transforms.Compose([
+    transforms.RandomCrop((h, w), padding=20),
+])
 
 transform_val_list = [
         transforms.Resize(size=(h, w),interpolation=3), #Image.BICUBIC
@@ -159,18 +172,23 @@ image_datasets['train'] = datasets.ImageFolder(os.path.join(data_dir, 'train' + 
                                           data_transforms['train'])
 image_datasets['val'] = datasets.ImageFolder(os.path.join(data_dir, 'val'),
                                           data_transforms['val'])
-
 dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
-                                             shuffle=True, num_workers=2, pin_memory=True,
+                                            sampler=RandomIdentitySampler(image_datasets[x].imgs, 32, 4),
+                                             shuffle=False, num_workers=2, pin_memory=False,
                                              prefetch_factor=2, persistent_workers=True) # 8 workers may work faster
               for x in ['train', 'val']}
 
+dataloaders['val'] =  torch.utils.data.DataLoader(image_datasets['val'], batch_size=opt.batchsize,
+                                            # sampler=RandomIdentitySampler(image_datasets[x].imgs, 32, 4),
+                                             shuffle=True, num_workers=2, pin_memory=False,
+                                             prefetch_factor=2, persistent_workers=True) # 8 workers may work faster
+
 # Use extra DG-Market Dataset for training. Please download it from https://github.com/NVlabs/DG-Net#dg-market.
 if opt.DG:
-    image_datasets['DG'] = DGFolder(os.path.join('../DG-Market' ),
+    image_datasets['DG'] = DGFolder(os.path.join('/home/chase/shy/Person_reID_baseline_pytorch/data/DG-Market' ),
                                           data_transforms['train'])
     dataloaders['DG'] = torch.utils.data.DataLoader(image_datasets['DG'], batch_size = max(8, opt.batchsize//2),
-                                             shuffle=True, num_workers=2, pin_memory=True)
+                                             shuffle=True, num_workers=2, pin_memory=False)
     DGloader_iter = enumerate(dataloaders['DG'])
 
 dataset_sizes = {x: len(image_datasets[x]) for x in ['train', 'val']}
@@ -207,7 +225,7 @@ def fliplr(img):
     img_flip = img.index_select(3,inv_idx)
     return img_flip
 
-def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
+def train_model(model, criterion, optimizer, scheduler, num_epochs=25, return_c=True):
     since = time.time()
 
     #best_model_wts = model.state_dict()
@@ -231,6 +249,11 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
         criterion_instance = InstanceLoss(gamma = opt.ins_gamma)
     if opt.sphere:
         criterion_sphere = losses.SphereFaceLoss(num_classes=opt.nclasses, embedding_size=512, margin=4)
+    if opt.rank:
+        rank_loss = RankLoss()
+    if opt.center:
+        center_loss = CenterLoss(num_classes=opt.nclasses, feat_dim=512)
+
     for epoch in range(num_epochs):
         print('Epoch {}/{}'.format(epoch, num_epochs - 1))
         print('-' * 10)
@@ -248,6 +271,13 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
             for iter, data in enumerate(dataloaders[phase]):
                 # get the inputs
                 inputs, labels = data
+                if not return_c:
+                    # crop_inputs = inputs.clone()
+                    # crop_inputs = transforms_crop(inputs)
+                    crop_inputs = torch.dropout(inputs, 0.3, train=True)
+                    inputs = torch.cat([inputs, crop_inputs])
+                    labels = torch.tensor(np.arange(labels.size(0)))
+                    labels = torch.cat([labels, labels])
                 now_batch_size,c,h,w = inputs.shape
                 if now_batch_size<opt.batchsize: # skip the last batch
                     continue
@@ -272,8 +302,6 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
                 else:
                     outputs = model(inputs)
 
-
-
                 if opt.adv>0 and iter%opt.aiter==0: 
                     inputs_adv = ODFA(model, inputs)
                     outputs_adv = model(inputs_adv)
@@ -281,15 +309,19 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
                 sm = nn.Softmax(dim=1)
                 log_sm = nn.LogSoftmax(dim=1)
                 return_feature = opt.arcface or opt.cosface or opt.circle or opt.triplet or opt.contrast or opt.instance or opt.lifted or opt.sphere
-                if return_feature: 
-                    logits, ff = outputs
+                if return_feature:
+                    if return_c:
+                        logits, ff = outputs
+                        loss = criterion(logits, labels)
+                        _, preds = torch.max(logits.data, 1)
+                        if opt.adv > 0 and iter % opt.aiter == 0:
+                            logits_adv, _ = outputs_adv
+                            loss += opt.adv * criterion(logits_adv, labels)
+                    else:
+                        ff = outputs
+                        loss = 0
                     fnorm = torch.norm(ff, p=2, dim=1, keepdim=True)
                     ff = ff.div(fnorm.expand_as(ff))
-                    loss = criterion(logits, labels) 
-                    _, preds = torch.max(logits.data, 1)
-                    if opt.adv>0  and iter%opt.aiter==0:
-                        logits_adv, _ = outputs_adv
-                        loss += opt.adv * criterion(logits_adv, labels)
                     if opt.arcface:
                         loss +=  criterion_arcface(ff, labels)/now_batch_size
                     if opt.cosface:
@@ -307,6 +339,10 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
                         loss += criterion_instance(ff) /now_batch_size
                     if opt.sphere:
                         loss +=  criterion_sphere(ff, labels)/now_batch_size
+                    if opt.rank:
+                        loss += rank_loss(ff, labels)#/now_batch_size
+                    if opt.center:
+                        loss += center_loss(ff, labels) * 0.0005
                 elif opt.PCB:  #  PCB
                     part = {}
                     num_part = 6
@@ -380,16 +416,20 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
                 else :  # for the old version like 0.3.0 and 0.3.1
                     running_loss += loss.data[0] * now_batch_size
                 del loss
-                running_corrects += float(torch.sum(preds == labels.data))
+                if return_c:
+                    running_corrects += float(torch.sum(preds == labels.data))
 
             epoch_loss = running_loss / dataset_sizes[phase]
-            epoch_acc = running_corrects / dataset_sizes[phase]
-            
-            print('{} Loss: {:.4f} Acc: {:.4f}'.format(
-                phase, epoch_loss, epoch_acc))
-            
             y_loss[phase].append(epoch_loss)
-            y_err[phase].append(1.0-epoch_acc)            
+
+            if return_c:
+                epoch_acc = running_corrects / dataset_sizes[phase]
+                print('{} Loss: {:.4f} Acc: {:.4f}'.format(
+                    phase, epoch_loss, epoch_acc))
+                y_err[phase].append(1.0 - epoch_acc)
+            else:
+                print('{} Loss: {:.4f}'.format(
+                    phase, epoch_loss))
             # deep copy the model
             if phase == 'val' and epoch%10 == 9:
                 last_model_wts = model.state_dict()
@@ -398,7 +438,7 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25):
                 else:
                     save_network(model, epoch+1)
             if phase == 'val':
-                draw_curve(epoch)
+                draw_curve(epoch, return_c=return_c)
             if phase == 'train':
                scheduler.step()
         time_elapsed = time.time() - since
@@ -428,15 +468,17 @@ x_epoch = []
 fig = plt.figure()
 ax0 = fig.add_subplot(121, title="loss")
 ax1 = fig.add_subplot(122, title="top1err")
-def draw_curve(current_epoch):
+def draw_curve(current_epoch, return_c=True):
     x_epoch.append(current_epoch)
     ax0.plot(x_epoch, y_loss['train'], 'bo-', label='train')
     ax0.plot(x_epoch, y_loss['val'], 'ro-', label='val')
-    ax1.plot(x_epoch, y_err['train'], 'bo-', label='train')
-    ax1.plot(x_epoch, y_err['val'], 'ro-', label='val')
+    if return_c:
+        ax1.plot(x_epoch, y_err['train'], 'bo-', label='train')
+        ax1.plot(x_epoch, y_err['val'], 'ro-', label='val')
     if current_epoch == 0:
         ax0.legend()
-        ax1.legend()
+        if return_c:
+            ax1.legend()
     fig.savefig( os.path.join('./model',name,'train.jpg'))
 
 ######################################################################
@@ -474,7 +516,7 @@ elif opt.use_hr:
 elif opt.use_convnext:
     model = ft_net_convnext(len(class_names), opt.droprate, circle = return_feature, linear_num=opt.linear_num)
 else:
-    model = ft_net(len(class_names), opt.droprate, opt.stride, circle = return_feature, ibn=opt.ibn, linear_num=opt.linear_num)
+    model = ft_net(len(class_names), opt.droprate, opt.stride, circle = return_feature, ibn=opt.ibn, linear_num=opt.linear_num, return_c=True)
 
 if opt.PCB:
     model = PCB(len(class_names))
@@ -566,7 +608,10 @@ copyfile('./model.py', dir_name+'/model.py')
 with open('%s/opts.yaml'%dir_name,'w') as fp:
     yaml.dump(vars(opt), fp, default_flow_style=False)
 
-criterion = nn.CrossEntropyLoss()
+if opt.label_smooth:
+    criterion = CrossEntropyLabelSmooth(num_classes=opt.nclasses)
+else:
+    criterion = nn.CrossEntropyLoss()
 
 if fp16:
     #model = network_to_half(model)
@@ -574,5 +619,5 @@ if fp16:
     model, optimizer_ft = amp.initialize(model, optimizer_ft, opt_level = "O1")
 
 model = train_model(model, criterion, optimizer_ft, exp_lr_scheduler,
-                       num_epochs=opt.total_epoch)
+                       num_epochs=opt.total_epoch, return_c=True)
 
