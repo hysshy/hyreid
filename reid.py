@@ -180,9 +180,9 @@ def reidMatch(qf, th, imgList=None, savePath=None):
     #         if matchList(popItem, matchList[i]):
 
 if __name__ == '__main__':
-    model_path = '/home/chase/shy/Person_reID_baseline_pytorch/model/ft_ResNet50/net_60.pth'
-    config_path = '/home/chase/shy/Person_reID_baseline_pytorch/model/ft_ResNet50/opts.yaml'
-    imgPath = '/home/chase/PycharmProjects/data/save7/93'
+    model_path = './model/ft_ResNet50/net_60.pth'
+    config_path = './model/ft_ResNet50/opts.yaml'
+    imgPath = '/home/chase/PycharmProjects/data/test2'
     savePath = '/home/chase/PycharmProjects/data/save3'
     test = Reid(model_path, config_path, [1])
     imgList = getAllFile(imgPath, '.jpg')

@@ -185,8 +185,8 @@ dataloaders['val'] =  torch.utils.data.DataLoader(image_datasets['val'], batch_s
 
 # Use extra DG-Market Dataset for training. Please download it from https://github.com/NVlabs/DG-Net#dg-market.
 if opt.DG:
-    image_datasets['DG'] = DGFolder(os.path.join('/home/chase/shy/Person_reID_baseline_pytorch/data/DG-Market' ),
-                                          data_transforms['train'])
+    image_datasets['DG'] = DGFolder(os.path.join('//data/DG-Market'),
+                                    data_transforms['train'])
     dataloaders['DG'] = torch.utils.data.DataLoader(image_datasets['DG'], batch_size = max(8, opt.batchsize//2),
                                              shuffle=True, num_workers=2, pin_memory=False)
     DGloader_iter = enumerate(dataloaders['DG'])
