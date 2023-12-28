@@ -173,7 +173,7 @@ image_datasets['train'] = datasets.ImageFolder(os.path.join(data_dir, 'train' + 
 image_datasets['val'] = datasets.ImageFolder(os.path.join(data_dir, 'val'),
                                           data_transforms['val'])
 dataloaders = {x: torch.utils.data.DataLoader(image_datasets[x], batch_size=opt.batchsize,
-                                            sampler=RandomIdentitySampler(image_datasets[x].imgs, 32, 4),
+                                            sampler=RandomIdentitySampler(image_datasets[x].imgs, opt.batchsize, 4),
                                              shuffle=False, num_workers=2, pin_memory=False,
                                              prefetch_factor=2, persistent_workers=True) # 8 workers may work faster
               for x in ['train', 'val']}
@@ -340,7 +340,8 @@ def train_model(model, criterion, optimizer, scheduler, num_epochs=25, return_c=
                     if opt.sphere:
                         loss +=  criterion_sphere(ff, labels)/now_batch_size
                     if opt.rank:
-                        loss += rank_loss(ff, labels)#/now_batch_size
+                        if phase == 'train':
+                            loss += rank_loss(ff, labels)#/now_batch_size
                     if opt.center:
                         loss += center_loss(ff, labels) * 0.0005
                 elif opt.PCB:  #  PCB
