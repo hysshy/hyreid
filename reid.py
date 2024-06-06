@@ -1,6 +1,7 @@
 from __future__ import print_function, division
 
 import shutil
+import time
 
 import cv2
 import torch
@@ -71,58 +72,55 @@ class Reid:
         model = model_structure.eval()
         model = model.cuda()
         model = fuse_all_conv_bn(model)
-        print(model)
         return model
 
     def extract_feature(self, imgList, maxBatch=16):
-        if self.config['linear_num'] <= 0:
-            if self.config['use_swin'] or self.config['use_swinv2'] or self.config['use_dense'] or self.config['use_convnext']:
-                self.config['linear_num'] = 1024
-            elif self.config['use_efficient']:
-                self.config['linear_num'] = 1792
-            elif self.config['use_NAS']:
-                self.config['linear_num'] = 4032
-            else:
-                self.config['linear_num'] = 2048
-        transImgList = []
-        for i in range(len(imgList)):
-            print(i)
-            transImgList.append(self.data_transforms(imgList[i]))
-        imgs = torch.stack(transImgList, 0)
-        n, c, h, w = imgs.size()
-        features = torch.FloatTensor(n, self.config['linear_num'])
-        batchnum = n // maxBatch + 1
-        for i in range(batchnum):
-            print(i)
-            start = i * maxBatch
-            end = min(start + maxBatch, n)
-            imgBatch = imgs[start:end]
-            ff = torch.FloatTensor(end-start, self.config['linear_num']).zero_().cuda()
-            if self.config['PCB']:
-                ff = torch.FloatTensor(end-start, 2048, 6).zero_().cuda()  # we have six parts
-
-            for i in range(2):
-                if(i==1):
-                    imgBatch = fliplr(imgBatch)
-                input_img = Variable(imgBatch.cuda())
-                for scale in self.ms:
-                    if scale != 1:
-                        # bicubic is only  available in pytorch>= 1.1
-                        input_img = nn.functional.interpolate(input_img, scale_factor=scale, mode='bicubic', align_corners=False)
-                    outputs = self.model(input_img)
-                    ff += outputs
-            if  self.config['PCB']:
-                # feature size (n,2048,6)
-                # 1. To treat every part equally, I calculate the norm for every 2048-dim part feature.
-                # 2. To keep the cosine score==1, sqrt(6) is added to norm the whole feature (2048*6).
-                fnorm = torch.norm(ff, p=2, dim=1, keepdim=True) * np.sqrt(6)
-                ff = ff.div(fnorm.expand_as(ff))
-                ff = ff.view(ff.size(0), -1)
-            else:
-                fnorm = torch.norm(ff, p=2, dim=1, keepdim=True)
-                ff = ff.div(fnorm.expand_as(ff))
-            features[start:end] = ff
-        return features
+        with torch.no_grad():
+            if self.config['linear_num'] <= 0:
+                if self.config['use_swin'] or self.config['use_swinv2'] or self.config['use_dense'] or self.config['use_convnext']:
+                    self.config['linear_num'] = 1024
+                elif self.config['use_efficient']:
+                    self.config['linear_num'] = 1792
+                elif self.config['use_NAS']:
+                    self.config['linear_num'] = 4032
+                else:
+                    self.config['linear_num'] = 2048
+            transImgList = []
+            for i in range(len(imgList)):
+                transImgList.append(self.data_transforms(imgList[i]))
+            imgs = torch.stack(transImgList, 0)
+            n, c, h, w = imgs.size()
+            features = torch.FloatTensor(n, self.config['linear_num'])
+            batchnum = n // maxBatch + 1
+            for i in range(batchnum):
+                start = i * maxBatch
+                end = min(start + maxBatch, n)
+                imgBatch = imgs[start:end]
+                ff = torch.FloatTensor(end-start, self.config['linear_num']).zero_().cuda()
+                if self.config['PCB']:
+                    ff = torch.FloatTensor(end-start, 2048, 6).zero_().cuda()  # we have six parts
+                for i in range(2):
+                    if(i==1):
+                        imgBatch = fliplr(imgBatch)
+                    input_img = Variable(imgBatch.cuda())
+                    for scale in self.ms:
+                        if scale != 1:
+                            # bicubic is only  available in pytorch>= 1.1
+                            input_img = nn.functional.interpolate(input_img, scale_factor=scale, mode='bicubic', align_corners=False)
+                        outputs = self.model(input_img)
+                        ff += outputs
+                if  self.config['PCB']:
+                    # feature size (n,2048,6)
+                    # 1. To treat every part equally, I calculate the norm for every 2048-dim part feature.
+                    # 2. To keep the cosine score==1, sqrt(6) is added to norm the whole feature (2048*6).
+                    fnorm = torch.norm(ff, p=2, dim=1, keepdim=True) * np.sqrt(6)
+                    ff = ff.div(fnorm.expand_as(ff))
+                    ff = ff.view(ff.size(0), -1)
+                else:
+                    fnorm = torch.norm(ff, p=2, dim=1, keepdim=True)
+                    ff = ff.div(fnorm.expand_as(ff))
+                features[start:end] = ff
+            return features.detach()
 
 def getAllFile(picPath, key):
     picList = []
@@ -180,19 +178,23 @@ def reidMatch(qf, th, imgList=None, savePath=None):
     #         if matchList(popItem, matchList[i]):
 
 if __name__ == '__main__':
-    model_path = './model/ft_ResNet50/net_60.pth'
-    config_path = './model/ft_ResNet50/opts.yaml'
-    imgPath = '/home/chase/PycharmProjects/data/test2'
-    savePath = '/home/chase/PycharmProjects/data/save3'
+    model_path = '/home/chase/PycharmProjects/RTSPDetect/model/ft_ResNet50/net_60.pth'
+    config_path = '/home/chase/PycharmProjects/RTSPDetect/model/ft_ResNet50/opts.yaml'
+    imgPath = '/home/chase/Desktop/138'
+    savePath = '/home/chase/shy/hyreid/data/savePath'
     test = Reid(model_path, config_path, [1])
     imgList = getAllFile(imgPath, '.jpg')
     plimgList = []
-    for img in imgList:
-        print(img)
-        img =cv2.imread(img)
-        img = Image.fromarray(img)
-        plimgList.append(img)
     with torch.no_grad():
+        for img in imgList:
+            print(img)
+            img =cv2.imread(img)
+            img = Image.fromarray(img)
+            start = time.time()
+            tt = test.extract_feature([img])
+            print(time.time()-start)
+            plimgList.append(img)
+
         ff = test.extract_feature(plimgList)
         reidMatch(ff,0.7, imgList, savePath)
 
