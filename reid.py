@@ -23,11 +23,10 @@ def fliplr(img):
     return img_flip
 
 class Reid:
-    def __init__(self, model_Path, config_path, gpu_ids, ms=[1.0]):
+    def __init__(self, model_Path, config_path, gpu_id, ms=[1.0]):
         with open(config_path, 'r') as stream:
             self.config = yaml.load(stream, Loader=yaml.FullLoader)
-        self.gpu_ids = gpu_ids
-        torch.cuda.set_device(gpu_ids[0])
+        self.gpu_id = gpu_id
         cudnn.benchmark = False
         self.ms = ms
         #self.h, self.w = 256, 128
@@ -70,7 +69,7 @@ class Reid:
         else:
             model_structure.classifier.classifier = nn.Sequential()
         model = model_structure.eval()
-        model = model.cuda()
+        model = model.cuda(self.gpu_id)
         model = fuse_all_conv_bn(model)
         return model
 
@@ -96,13 +95,13 @@ class Reid:
                 start = i * maxBatch
                 end = min(start + maxBatch, n)
                 imgBatch = imgs[start:end]
-                ff = torch.FloatTensor(end-start, self.config['linear_num']).zero_().cuda()
+                ff = torch.FloatTensor(end-start, self.config['linear_num']).zero_().cuda(self.gpu_id)
                 if self.config['PCB']:
-                    ff = torch.FloatTensor(end-start, 2048, 6).zero_().cuda()  # we have six parts
+                    ff = torch.FloatTensor(end-start, 2048, 6).zero_().cuda(self.gpu_id)  # we have six parts
                 for i in range(2):
                     if(i==1):
                         imgBatch = fliplr(imgBatch)
-                    input_img = Variable(imgBatch.cuda())
+                    input_img = Variable(imgBatch.cuda(self.gpu_id))
                     for scale in self.ms:
                         if scale != 1:
                             # bicubic is only  available in pytorch>= 1.1
@@ -160,11 +159,11 @@ def reidMatch(qf, th, imgList=None, savePath=None):
             selfmatch(matchIndex, i, matchList)
             matchMap.append(matchList)
     print(matchMap)
-    # for i in range(len(matchMap)):
-    #     if not os.path.exists(savePath+'/'+str(i)):
-    #         os.makedirs(savePath+'/'+str(i))
-    #     for j in matchMap[i]:
-    #         shutil.copy(imgList[j], savePath+'/'+str(i))
+    for i in range(len(matchMap)):
+        if not os.path.exists(savePath+'/'+str(i)):
+            os.makedirs(savePath+'/'+str(i))
+        for j in matchMap[i]:
+            shutil.copy(imgList[j], savePath+'/'+str(i))
     # matchList =[]
     # for idx in range(len(matchIndex)):
     #     matchItem = [idx]
@@ -178,11 +177,11 @@ def reidMatch(qf, th, imgList=None, savePath=None):
     #         if matchList(popItem, matchList[i]):
 
 if __name__ == '__main__':
-    model_path = '/home/chase/PycharmProjects/RTSPDetect/model/ft_ResNet50/net_60.pth'
-    config_path = '/home/chase/PycharmProjects/RTSPDetect/model/ft_ResNet50/opts.yaml'
-    imgPath = '/home/chase/Desktop/138'
-    savePath = '/home/chase/shy/hyreid/data/savePath'
-    test = Reid(model_path, config_path, [1])
+    model_path = '/home/chase/shy/hyreid/model/ft_ResNet50/net_last.pth'
+    config_path = '/home/chase/shy/hyreid/model/ft_ResNet50/opts.yaml'
+    imgPath = '/home/chase/shy/dataset/car_reid/test'
+    savePath = '/home/chase/shy/dataset/car_reid/draw'
+    test = Reid(model_path, config_path, 1)
     imgList = getAllFile(imgPath, '.jpg')
     plimgList = []
     with torch.no_grad():
@@ -196,5 +195,5 @@ if __name__ == '__main__':
             plimgList.append(img)
 
         ff = test.extract_feature(plimgList)
-        reidMatch(ff,0.7, imgList, savePath)
+        reidMatch(ff,0.65, imgList, savePath)
 

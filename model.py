@@ -77,7 +77,7 @@ class ft_net(nn.Module):
 
     def __init__(self, class_num=751, droprate=0.5, stride=2, circle=False, ibn=False, linear_num=512, return_c=True):
         super(ft_net, self).__init__()
-        model_ft = models.resnet50(pretrained=True)
+        model_ft = models.resnet50(pretrained=False)
         if ibn==True:
             model_ft = torch.hub.load('XingangPan/IBN-Net', 'resnet50_ibn_a', pretrained=True)
         # avg pooling to global pooling
@@ -122,6 +122,7 @@ class ft_net_swin(nn.Module):
     def forward(self, x):
         x = self.model.forward_features(x)
         # swin is update in latest timm>0.6.0, so I add the following two lines.
+        x = x.view(x.size(0), -1, x.size(3))
         x = self.avgpool(x.permute((0,2,1)))
         x = x.view(x.size(0), x.size(1))
         x = self.classifier(x)

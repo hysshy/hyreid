@@ -41,12 +41,12 @@ from center_loss import CenterLoss
 # Options
 # --------
 parser = argparse.ArgumentParser(description='Training')
-parser.add_argument('--gpu_ids',default='0', type=str,help='gpu_ids: e.g. 0  0,1,2  0,2')
+parser.add_argument('--gpu_ids',default='0,1', type=str,help='gpu_ids: e.g. 0  0,1,2  0,2')
 parser.add_argument('--name',default='ft_ResNet50', type=str, help='output model name')
 # data
-parser.add_argument('--data_dir',default='../Market/pytorch',type=str, help='training dir path')
-parser.add_argument('--train_all', action='store_true', help='use all training data' )
-parser.add_argument('--batchsize', default=32, type=int, help='batchsize')
+parser.add_argument('--data_dir',default='/home/chase/shy/dataset/car_reid',type=str, help='training dir path')
+parser.add_argument('--train_all', default=True, help='use all training data' )
+parser.add_argument('--batchsize', default=64, type=int, help='batchsize')
 parser.add_argument('--color_jitter', action='store_true', help='use color jitter in training' )
 parser.add_argument('--erasing_p', default=0, type=float, help='Random Erasing probability, in [0,1]')
 parser.add_argument('--DG', action='store_true', help='use extra DG-Market Dataset for training. Please download it from https://github.com/NVlabs/DG-Net#dg-market.' )
